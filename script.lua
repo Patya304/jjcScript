@@ -22,7 +22,7 @@ local CONFIG = {
     },
     
     DEFAULT_GRAVITY = 162.2,
-    BOSS_FARM_OFFSET = Vector3.new(0, 5, 0),
+    BOSS_FARM_OFFSET = Vector3.new(0, 0, 7),
     RESPAWN_CHECK_INTERVAL = 3 -- Seconds between respawn checks
 }
 
