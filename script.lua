@@ -2,7 +2,7 @@ local http = game:GetService("HttpService")
 local req = (syn and syn.request) or (http_request or request or http.request)
 local player = game.Players.LocalPlayer
 
--- ====== KONFIGURÁCIÓ ======
+-- ====== CONFIGURATION SECTION ======
 local CONFIG = {
     WEBHOOKS = {
         STARTUP = "https://discord.com/api/webhooks/1346500502757572678/NMS__yzvsi58tJOzwkjRxbrfNJa1h7pFjUNN3_xrZWU9_3P3-GVXx_SY3T_mT4HwRW3W",
@@ -11,81 +11,30 @@ local CONFIG = {
     
     BOSS_LIST = {"Sukuna", "Meguna", "UltSukuna", "Choso", "Kashimo", "TheStrongest"},
     
-    SETTINGS = {
-        BOSS_OFFSET = Vector3.new(0, 7, 0),
-        GRAVITY = {
-            NORMAL = 162.2,
-            ZERO = 0
-        },
-        COOLDOWNS = {
-            BOSS_REPORT = 5
-        },
-        RESPAWN_CHECK_INTERVAL = 3 -- Seconds between respawn checks
-    }
+    TELEPORT_LOCATIONS = {
+        ["Miyashi Park"] = CFrame.new(-819, 76, 509),
+        ["Spin Location"] = CFrame.new(-620, 76, 472),
+        ["Shop"] = CFrame.new(1415, 210, 174),
+        ["Rank Up"] = CFrame.new(1207, 149, 678),
+        ["Black Flash"] = CFrame.new(1205, 154, 903),
+        ["Toju"] = CFrame.new(-741, 77, 722),
+        ["The King"] = CFrame.new(17613, 84, -36)
+    },
+    
+    DEFAULT_GRAVITY = 162.2,
+    BOSS_FARM_OFFSET = Vector3.new(0, 5, 0),
+    RESPAWN_CHECK_INTERVAL = 3 -- Seconds between respawn checks
 }
 
--- ====== SEGÉDFÜGGVÉNYEK ======
-local function SendNotification(title, content)
-    OrionLib:MakeNotification({
-        Name = title,
-        Content = content,
-        Image = "rbxassetid://4483345998",
-        Time = 3
-    })
-end
-
-local function SetCharacterCollision(character, state)
-    for _, part in pairs(character:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanCollide = state
-        end
-    end
-end
-
-local function TeleportToTarget(character, target)
-    local charRoot = character:FindFirstChild("HumanoidRootPart")
-    local targetRoot = target:FindFirstChild("HumanoidRootPart")
-    
-    if charRoot and targetRoot then
-        -- Mögé teleportálás a konfigban megadott offsettel
-        charRoot.CFrame = targetRoot.CFrame * CFrame.new(CONFIG.SETTINGS.BOSS_OFFSET)
-        return true
-    end
-    return false
-end
-
-local function PerformAttack(target)
-    game:GetService("Players").LocalPlayer.Character.Main_Client.Main_Server.Swing:FireServer()
-    local args = {
-        [1] = {
-            ["Character"] = workspace:WaitForChild(player.Name),
-            ["Action"] = "M1",
-            ["Combo"] = 1,
-            ["Target"] = target,
-            ["BehindPlayer"] = true
-        }
-    }
-    game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("CombatEvent"):FireServer(unpack(args))
-end
-
--- ====== WEBHOOK KEZELÉS ======
-local function SendStartNotification()
+-- ====== UTILITY FUNCTIONS ======
+local function SendDiscordWebhook(webhookUrl, embedData)
     local data = {
-        embeds = {{
-            title = "✅ Script Activated",
-            description = "`" .. player.Name .. "` has started the script.",
-            color = 0x00FF00,
-            fields = {
-                {name = "Player Profile", value = "[Click Here](https://www.roblox.com/users/"..player.UserId.."/profile)", inline = true},
-                {name = "Time", value = os.date("`%Y.%m.%d` **|** `%H:%M`"), inline = true}
-            },
-            footer = {text = "JJC Boss Tracker"}
-        }}
+        embeds = {embedData}
     }
     
     pcall(function()
         req({
-            Url = CONFIG.WEBHOOKS.STARTUP,
+            Url = webhookUrl,
             Method = "POST",
             Headers = {["Content-Type"] = "application/json"},
             Body = http:JSONEncode(data)
@@ -93,9 +42,51 @@ local function SendStartNotification()
     end)
 end
 
+local function SetupCharacter(character)
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+        end
+    end
+end
+
+local function ExecuteAttack(target, behindPlayer)
+    local character = player.Character or player.CharacterAdded:Wait()
+    
+    -- Swing attack
+    game:GetService("Players").LocalPlayer.Character.Main_Client.Main_Server.Swing:FireServer()
+    
+    -- Combat event
+    local args = {
+        [1] = {
+            ["Character"] = character,
+            ["Action"] = "M1",
+            ["Combo"] = 1,
+            ["Target"] = target,
+            ["BehindPlayer"] = behindPlayer
+        }
+    }
+    game:GetService("ReplicatedStorage").Events.CombatEvent:FireServer(unpack(args))
+end
+
+-- ====== NOTIFICATION SYSTEM ======
+local function SendStartNotification()
+    SendDiscordWebhook(CONFIG.WEBHOOKS.STARTUP, {
+        title = "✅ Script Activated",
+        description = "`" .. player.Name .. "` has started the script.",
+        color = 0x00FF00,
+        fields = {
+            {name = "Player Profile", value = "[Click Here](https://www.roblox.com/users/"..player.UserId.."/profile)", inline = true},
+            {name = "Time", value = os.date("`%Y.%m.%d` **|** `%H:%M`"), inline = true}
+        },
+        footer = {text = "JJC Boss Tracker"}
+    })
+end
+
+-- ====== BOSS TRACKER SYSTEM ======
 local BossTracker = {
     ReportedKills = {},
-    Cooldown = CONFIG.SETTINGS.COOLDOWNS.BOSS_REPORT
+    Cooldown = 5 -- Seconds between reports
 }
 
 function BossTracker:LogKill(bossName)
@@ -104,73 +95,67 @@ function BossTracker:LogKill(bossName)
         return
     end
 
-    local data = {
-        embeds = {{
-            title = "👑 "..bossName.." ELIMINATED",
-            description = "`"..player.Name.."` defeated the boss!",
-            color = 0xFF3030,
-            fields = {
-                {name = "Player Profile", value = "[Click Here](https://www.roblox.com/users/"..player.UserId.."/profile)", inline = true},
-                {name = "Time", value = os.date("`%Y.%m.%d` **|** `%H:%M`"), inline = true}
-            },
-            footer = {text = "JJC Boss Logger"}
-        }}
-    }
-
-    pcall(function()
-        req({
-            Url = CONFIG.WEBHOOKS.KILLS,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = http:JSONEncode(data)
-        })
-    end)
+    SendDiscordWebhook(CONFIG.WEBHOOKS.KILLS, {
+        title = "👑 "..bossName.." ELIMINATED",
+        description = "`"..player.Name.."` defeated the boss!",
+        color = 0xFF3030,
+        fields = {
+            {name = "Player Profile", value = "[Click Here](https://www.roblox.com/users/"..player.UserId.."/profile)", inline = true},
+            {name = "Time", value = os.date("`%Y.%m.%d` **|** `%H:%M`"), inline = true}
+        },
+        footer = {text = "JJC Boss Logger"}
+    })
 
     self.ReportedKills[bossName] = now
 end
 
--- ====== JAVÍTOTT AUTOMATIZÁLÁSOK ======
-local function CreateAutoFarmToggle(tab, name, targetName, description)
+local function MonitorBossDeaths()
+    while task.wait(1) do
+        for _, bossName in ipairs(CONFIG.BOSS_LIST) do
+            local boss = workspace:FindFirstChild(bossName)
+            if boss and boss:FindFirstChild("Humanoid") and boss.Humanoid.Health <= 0 then
+                BossTracker:LogKill(bossName)
+                task.wait(0.5) -- Small delay between checks
+            end
+        end
+    end
+end
+
+-- ====== IMPROVED AUTO FARM FUNCTIONS ======
+local function CreateAutoFarmToggle(tab, name, targetName, isBoss)
     local toggle = false
     local lastValidTarget = nil
     
     tab:AddToggle({
         Name = name,
         Default = false,
-        Tooltip = description,
         Callback = function(value)
             toggle = value
             if toggle then
-                workspace.Gravity = CONFIG.SETTINGS.GRAVITY.ZERO
-                
-                -- Character monitoring thread
-                local function MonitorCharacter()
-                    while toggle do
-                        -- Wait if character is dead
-                        if not player.Character or not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then
-                            repeat
-                                task.wait(1)
-                            until player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0
-                            
-                            -- Reset collision after respawn
-                            SetCharacterCollision(player.Character, false)
-                        end
-                        task.wait(0.5)
-                    end
-                end
-                
-                task.spawn(MonitorCharacter)
+                workspace.Gravity = 0
                 
                 -- Main farming loop
                 while toggle do
                     task.wait(0.1)
                     if not toggle then break end
-                    
+
+                    -- Wait for character to respawn if dead
+                    if not player.Character or not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then
+                        repeat
+                            task.wait(1)
+                        until player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0
+                        
+                        -- Reset collision after respawn
+                        SetupCharacter(player.Character)
+                    end
+
                     local character = player.Character
                     if not character or not character:FindFirstChild("HumanoidRootPart") then
                         task.wait(1)
                         continue
                     end
+
+                    SetupCharacter(character)
                     
                     -- Target finding with respawn detection
                     local target = nil
@@ -185,7 +170,7 @@ local function CreateAutoFarmToggle(tab, name, targetName, description)
                         
                         -- If no target found, wait for respawn check interval
                         if not target then
-                            task.wait(CONFIG.SETTINGS.RESPAWN_CHECK_INTERVAL)
+                            task.wait(CONFIG.RESPAWN_CHECK_INTERVAL)
                             continue
                         end
                     end
@@ -198,110 +183,181 @@ local function CreateAutoFarmToggle(tab, name, targetName, description)
                     end
                     
                     -- Teleport and attack
-                    SetCharacterCollision(character, false)
-                    if TeleportToTarget(character, target) then
-                        PerformAttack(target)
+                    local targetRoot = target:FindFirstChild("HumanoidRootPart")
+                    local charRoot = character:FindFirstChild("HumanoidRootPart")
+                    
+                    if targetRoot and charRoot then
+                        charRoot.CFrame = targetRoot.CFrame * CFrame.new(CONFIG.BOSS_FARM_OFFSET)
+                        ExecuteAttack(target, true)
                     end
                 end
                 
-                workspace.Gravity = CONFIG.SETTINGS.GRAVITY.NORMAL
+                workspace.Gravity = CONFIG.DEFAULT_GRAVITY
                 lastValidTarget = nil
             end
         end
     })
 end
 
--- ====== MENÜ INICIALIZÁLÁS ======
+local function CreateSkillToggle(tab, name, keyCode)
+    local toggle = false
+    tab:AddToggle({
+        Name = name,
+        Default = false,
+        Callback = function(value)
+            toggle = value
+            if toggle then
+                while toggle do
+                    if not toggle then return end
+                    task.wait(1)
+                    game:GetService("VirtualInputManager"):SendKeyEvent(true, keyCode, false, game)
+                end
+            end
+        end
+    })
+end
+
+-- ====== UI INITIALIZATION ======
 local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/Xtentacion178/Dbbdbr/main/Rbsbbs"))()
 
--- Fő ablak
-local Window = OrionLib:MakeWindow({
-    Name = "Jujutsu Chronicles - Premium",
-    HidePremium = false,
-    SaveConfig = true,
-    ConfigFolder = "JJCConfig"
+-- Initial notifications
+OrionLib:MakeNotification({
+    Name = "Loading...",
+    Content = "Script Loading, please wait",
+    Image = "rbxassetid://4483345998",
+    Time = 1
 })
 
--- Értesítések
-SendNotification("Betöltés...", "A script inicializálása folyamatban...")
-SendStartNotification()
+local Window = OrionLib:MakeWindow({
+    Name = "Remake Jujutsu Chronicles",
+    HidePremium = false,
+    SaveConfig = true,
+    ConfigFolder = "OrionConfig"
+})
 
--- ====== FÜLÖK LÉTREHOZÁSA ======
--- Auto Farm fül
+OrionLib:MakeNotification({
+    Name = "Loaded",
+    Content = "Script made by gokuooo99",
+    Image = "rbxassetid://4483345998",
+    Time = 1
+})
+
+-- ====== MAIN TABS ======
+
+-- Auto Farm Tab
 local AutoFarmTab = Window:MakeTab({
     Name = "Auto Farm",
     Icon = "rbxassetid://4483345998",
     PremiumOnly = false
 })
 
--- Strength Farm
-CreateAutoFarmToggle(AutoFarmTab, "Strength Farm", "Dummy", "Automatikusan farmolja az erőt a bábunál")
-CreateAutoFarmToggle(AutoFarmTab, "Sorcerer Farm", "Sorcerer", "Automatikusan farmolja a varázslókat")
+-- Strength Restart
+local punchToggle = false
+AutoFarmTab:AddToggle({
+    Name = "Strength Restart",
+    Default = false,
+    Callback = function(value)
+        punchToggle = value
+        if punchToggle then
+            while punchToggle do 
+                task.wait(0.001)
+                if punchToggle then
+                    game:GetService("Players").LocalPlayer.Character.Main_Client.Main_Server.Swing:FireServer()
+                    local args = {
+                        [1] = {
+                            ["Character"] = workspace:WaitForChild(player.Name),
+                            ["Action"] = "M1",
+                            ["Combo"] = 1,
+                            ["Target"] = workspace:WaitForChild(player.Name),
+                            ["BehindPlayer"] = true
+                        }
+                    }
+                    game:GetService("ReplicatedStorage").Events.CombatEvent:FireServer(unpack(args))
+                    local character = player.Character or player.CharacterAdded:Wait() 
+                    local humanoidrootpart = character:WaitForChild("HumanoidRootPart") 
+                    task.wait(0.0001)
+                    humanoidrootpart.CFrame = CFrame.new(1205, 154, 950)
+                end
+            end
+        end
+    end
+})
 
--- Skill Automation
-AutoFarmTab:AddLabel("Skill Automation")
-CreateSkillToggle(AutoFarmTab, "Auto Z Skill", "Z")
-CreateSkillToggle(AutoFarmTab, "Auto X Skill", "X")
-CreateSkillToggle(AutoFarmTab, "Auto C Skill", "C")
-CreateSkillToggle(AutoFarmTab, "Auto B Skill", "B")
-CreateSkillToggle(AutoFarmTab, "Auto N Skill", "N")
+-- Skill Toggles
+CreateSkillToggle(AutoFarmTab, "Auto Z Skill", Enum.KeyCode.Z)
+CreateSkillToggle(AutoFarmTab, "Auto X Skill", Enum.KeyCode.X)
+CreateSkillToggle(AutoFarmTab, "Auto C Skill", Enum.KeyCode.C)
+CreateSkillToggle(AutoFarmTab, "Auto B Skill", Enum.KeyCode.B)
+CreateSkillToggle(AutoFarmTab, "Auto N Skill", Enum.KeyCode.N)
 
--- Boss Farm fül
+-- Auto Strength
+local dummyToggle = false
+AutoFarmTab:AddToggle({
+    Name = "Auto Strength (Dummy)",
+    Default = false,
+    Callback = function(value)
+        dummyToggle = value
+        if dummyToggle then
+            workspace.Gravity = 0
+            while dummyToggle do
+                task.wait()
+                
+                local character = player.Character or player.CharacterAdded:Wait()
+                SetupCharacter(character)
+                
+                local npc = workspace:FindFirstChild("Dummy")
+                if npc then
+                    local npcRoot = npc:WaitForChild("HumanoidRootPart")
+                    local charRoot = character:WaitForChild("HumanoidRootPart")
+                    
+                    if npcRoot and charRoot then
+                        charRoot.CFrame = npcRoot.CFrame * CFrame.new(CONFIG.BOSS_FARM_OFFSET)
+                        ExecuteAttack(npc, false)
+                    end
+                end
+            end
+            workspace.Gravity = CONFIG.DEFAULT_GRAVITY
+        end
+    end
+})
+
+-- Auto Sorcerer
+CreateAutoFarmToggle(AutoFarmTab, "Auto Sorcerer", "Sorcerer", false)
+
+-- Bosses Tab
 local BossTab = Window:MakeTab({
-    Name = "Boss Farm",
+    Name = "Bosses",
     Icon = "rbxassetid://4483345998",
     PremiumOnly = false
 })
 
--- Boss Farmolások
+-- Create boss toggles from config
 for _, bossName in ipairs(CONFIG.BOSS_LIST) do
-    CreateAutoFarmToggle(BossTab, "Auto "..bossName, bossName, "Automatikusan farmolja a(z) "..bossName.." boss-t")
+    CreateAutoFarmToggle(BossTab, "Auto "..bossName, bossName, true)
 end
 
--- Teleport fül
+-- Teleport Tab
 local TeleportTab = Window:MakeTab({
     Name = "Teleport",
     Icon = "rbxassetid://4483345998",
     PremiumOnly = false
 })
 
--- Teleport helyek
-local TELEPORT_LOCATIONS = {
-    ["Miyashi Park"] = CFrame.new(-819, 76, 509),
-    ["Spin Location"] = CFrame.new(-620, 76, 472),
-    ["Shop"] = CFrame.new(1415, 210, 174),
-    ["Rank Up"] = CFrame.new(1207, 149, 678),
-    ["Black Flash"] = CFrame.new(1205, 154, 903),
-    ["Toju"] = CFrame.new(-741, 77, 722),
-    ["The King"] = CFrame.new(17613, 84, -36)
-}
-
-for name, cf in pairs(TELEPORT_LOCATIONS) do
+-- Create teleport buttons from config
+for locationName, cframe in pairs(CONFIG.TELEPORT_LOCATIONS) do
     TeleportTab:AddButton({
-        Name = name,
+        Name = locationName,
         Callback = function()
             local character = player.Character or player.CharacterAdded:Wait()
-            local root = character:WaitForChild("HumanoidRootPart")
-            root.CFrame = cf
-            SendNotification("Teleport", "Sikeresen teleportálva: "..name)
+            local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+            humanoidRootPart.CFrame = cframe
         end
     })
 end
 
--- ====== BOSS FIGYELÉS ======
-local function MonitorBossDeaths()
-    while task.wait(1) do
-        for _, bossName in ipairs(CONFIG.BOSS_LIST) do
-            local boss = workspace:FindFirstChild(bossName)
-            if boss and boss:FindFirstChild("Humanoid") and boss.Humanoid.Health <= 0 then
-                BossTracker:LogKill(bossName)
-                task.wait(0.5)
-            end
-        end
-    end
-end
-
--- ====== INICIALIZÁLÁS ======
+-- ====== INITIALIZATION ======
+SendStartNotification()
 task.spawn(MonitorBossDeaths)
-SendNotification("Kész!", "A script sikeresen betöltődött!")
+
+-- Anti-AFK
 loadstring(game:HttpGet("https://raw.githubusercontent.com/hassanxzayn-lua/Anti-afk/main/antiafkbyhassanxzyn"))()
